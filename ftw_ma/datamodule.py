@@ -28,12 +28,21 @@ class FTWMapAfricaDataModule(LightningDataModule):
         self,
         batch_size: int = 32,
         num_workers: int = 0,
-        global_stats: Optional[Union[Dict[str, Any], Tuple, List]] = None,
+        global_stats: dict = None,  # Gregg: Removed type hint "Optional[Union[Dict[str, Any], Tuple, List]]" and added "dict"
         normalization_strategy: str = "min_max",
         normalization_stat_procedure: str = "gab",
         random_shuffle: bool = False,
-        crop_size: Optional[Union[int, Tuple[int, int]]] = None,
-        **kwargs
+        crop_size = None,  # Gregg: Removed type hint "Optional[Union[int, Tuple[int, int]]]"
+
+        # Gregg Added Start
+        temporal_options: str = "windowB",
+        num_samples: int = -1,
+        data_dir: str = None,
+        catalog: str = None,
+        img_clip_val: int = 0,
+        # Gregg Added End
+        
+        # **kwargs # Commented out 
     ):
         """
         Initialize the data module.
@@ -54,6 +63,17 @@ class FTWMapAfricaDataModule(LightningDataModule):
                 If None, defaults to (256, 256).
             **kwargs: Additional arguments for FTWMapAfrica.
         """
+
+        # Gregg Added Start
+        kwargs = {
+        "temporal_options": temporal_options,
+        "num_samples": num_samples,
+        "data_dir": data_dir,
+        "catalog": catalog,
+        "img_clip_val": img_clip_val,
+        }
+        # Gregg Added End
+        
         if "split" in kwargs:
             raise ValueError("Cannot specify split in FTWDataModule")
         
@@ -131,6 +151,14 @@ class FTWMapAfricaDataModule(LightningDataModule):
         self.normalization_strategy = normalization_strategy
         self.normalization_stat_procedure = normalization_stat_procedure
         self.crop_size = crop_size
+
+        # Gregg Added Start
+        self.temporal_options = temporal_options
+        self.num_samples = num_samples
+        self.data_dir = data_dir
+        self.catalog = catalog
+        self.img_clip_val = img_clip_val
+        # Gregg Added End
 
         augs = [
             K.RandomRotation(p=0.5, degrees=(90, 90)),

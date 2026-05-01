@@ -83,8 +83,12 @@ class CustomSemanticSegmentationTask(BaseTask):
             loss: Name of the loss function, currently supports
                 'ce', 'jaccard', 'focal', 'dice', and 'logcoshdice' loss, and 
                 various tversky and tversky focal losses: 'tverskyfocal', 
-                'tverskyfocalce', 'localtversky', 'localtverskyce', 
+                'tverskyfocalce', 'localtversky', 'localtverskyce',
                 'tversky' (tversky index)
+                # Gregg Start: Added soft compactness loss option documentation
+                Also supports 'localtversky_softcompactness', which combines locally
+                weighted Tversky focal loss with a differentiable soft compactness term.
+                # Gregg End: Added soft compactness loss option documentation
             class_weights: Optional rescaling weight given to each
                 class and used with 'ce' loss.
             ignore_index: Optional integer class index to ignore in the loss and
@@ -198,6 +202,31 @@ class CustomSemanticSegmentationTask(BaseTask):
             self.criterion = LocallyWeightedTverskyFocalLoss(
                 ignore_index=ignore_index
             )
+
+        elif loss == "localtversky":
+            self.criterion = LocallyWeightedTverskyFocalLoss(
+                ignore_index=ignore_index
+            )
+
+        # Gregg Start: Added locally weighted Tversky focal + soft compactness loss
+        elif loss == "localtversky_softcompactness":
+            self.criterion = LocallyWeightedTverskyFocalSoftCompactnessLoss(
+                mode="multiclass",
+                from_logits=True,
+                smooth=1.0,
+                alpha=0.7,
+                gamma=1.33,
+                ignore_index=ignore_index,
+                field_class=1,
+                lambda_compactness=0.01,
+            )
+        # Gregg End: Added locally weighted Tversky focal + soft compactness loss
+
+        elif loss == "localtverskyce":
+            self.criterion = LocallyWeightedTverskyFocalCELoss(
+                ignore_index=ignore_index
+            )
+            
         elif loss == "localtverskyce":
             self.criterion = LocallyWeightedTverskyFocalCELoss(
                 ignore_index=ignore_index
@@ -205,10 +234,13 @@ class CustomSemanticSegmentationTask(BaseTask):
         else:
             raise ValueError(
                 f"Loss type '{loss}' is not valid. "
-                "Currently, supports 'ce', 'jaccard', 'focal', " \
-                "'tversky', 'dice', and 'logcoshdice', " \
-                "'tverskyfocalce', 'tverskyfocalce', 'localtversky', " \
-                "'localtverskyce'."
+                "Currently, supports 'ce', 'jaccard', 'focal', "
+                "'tversky', 'dice', and 'logcoshdice', "
+                "'tverskyfocalce', 'tverskyfocal', 'localtversky', "
+                "'localtverskyce', "
+                # Gregg Start: Added soft compactness loss option to error message
+                "'localtversky_softcompactness'."
+                # Gregg End: Added soft compactness loss option to error message
             )
 
     def configure_metrics(self) -> None:

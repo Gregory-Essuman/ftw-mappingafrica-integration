@@ -1,6 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+# Gregg Start: Added math import for compactness calculation
+import math
+# Gregg End: Added math import for compactness calculation
 from segmentation_models_pytorch.losses import DiceLoss as Dice
 
 
@@ -151,6 +154,79 @@ class TverskyFocalCELoss(nn.Module):
         return self.tversky_weight * tversky(predict, target) + \
                (1 - self.tversky_weight) * ce(predict, target)
 
+class SoftCompactnessLoss(nn.Module):
+    """
+    Differentiable soft compactness loss.
+
+    Uses predicted field probabilities instead of hard polygons:
+        soft_area = sum(probabilities)
+        soft_perimeter = sum(probability gradients)
+        compactness = 4*pi*area / perimeter^2
+
+    The loss compares predicted soft compactness to label soft compactness.
+    """
+
+    def __init__(self, field_class=1, ignore_index=-100, eps=1e-6):
+        super().__init__()
+        self.field_class = field_class
+        self.ignore_index = ignore_index
+        self.eps = eps
+
+    def _soft_perimeter(self, prob):
+        """
+        prob: [B, H, W]
+        """
+        dx = torch.abs(prob[:, :, 1:] - prob[:, :, :-1])
+        dy = torch.abs(prob[:, 1:, :] - prob[:, :-1, :])
+
+        perimeter = dx.sum(dim=(1, 2)) + dy.sum(dim=(1, 2))
+        return perimeter
+
+    def _soft_compactness(self, prob):
+        """
+        prob: [B, H, W]
+        """
+        area = prob.sum(dim=(1, 2))
+        perimeter = self._soft_perimeter(prob)
+
+        compactness = (4.0 * math.pi * area) / (
+            perimeter ** 2 + self.eps
+        )
+
+        return compactness
+
+    def forward(self, logits, target):
+        """
+        logits: [B, C, H, W]
+        target: [B, H, W]
+        """
+
+        # Convert logits to probabilities
+        probs = F.softmax(logits, dim=1)
+
+        # Predicted soft field probability
+        pred_field_prob = probs[:, self.field_class, :, :]
+
+        # Valid mask for ignore_index
+        valid_mask = target != self.ignore_index
+
+        # Label binary field mask
+        safe_target = target.masked_fill(~valid_mask, 0)
+        label_field_prob = (safe_target == self.field_class).float()
+
+        # Remove ignored pixels from both prediction and label
+        valid_float = valid_mask.float()
+        pred_field_prob = pred_field_prob * valid_float
+        label_field_prob = label_field_prob * valid_float
+
+        # Compute compactness
+        pred_compactness = self._soft_compactness(pred_field_prob)
+        label_compactness = self._soft_compactness(label_field_prob)
+
+        # Compare prediction vs label compactness
+        loss = torch.abs(pred_compactness - label_compactness)
+
+        return loss.mean()
 
 class LocallyWeightedTverskyFocalLoss(TverskyFocalLoss):
     """
@@ -178,6 +254,50 @@ class LocallyWeightedTverskyFocalLoss(TverskyFocalLoss):
 
         self.weight = weight
         return super().forward(y_pred, y_true)
+
+class LocallyWeightedTverskyFocalSoftCompactnessLoss(nn.Module):
+    """
+    Compound loss:
+        total_loss = locally_weighted_tversky_focal_loss
+                   + lambda_compactness * soft_compactness_loss
+    """
+
+    def __init__(
+        self,
+        mode="multiclass",
+        from_logits=True,
+        smooth=1.0,
+        alpha=0.7,
+        gamma=1.33,
+        ignore_index=-100,
+        reduction="sum",
+        field_class=1,
+        lambda_compactness=0.01,
+    ):
+        super().__init__()
+
+        self.base_loss = LocallyWeightedTverskyFocalLoss(
+            mode=mode,
+            from_logits=from_logits,
+            smooth=smooth,
+            alpha=alpha,
+            gamma=gamma,
+            ignore_index=ignore_index,
+            reduction=reduction,
+        )
+
+        self.compactness_loss = SoftCompactnessLoss(
+            field_class=field_class,
+            ignore_index=ignore_index,
+        )
+
+        self.lambda_compactness = lambda_compactness
+
+    def forward(self, predict, target):
+        base = self.base_loss(predict, target)
+        compactness = self.compactness_loss(predict, target)
+
+        return base + self.lambda_compactness * compactness
 
 class LocallyWeightedTverskyFocalCELoss(nn.Module):
     """

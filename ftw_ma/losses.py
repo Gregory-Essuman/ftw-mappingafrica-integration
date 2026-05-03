@@ -156,14 +156,17 @@ class TverskyFocalCELoss(nn.Module):
 
 class SoftCompactnessLoss(nn.Module):
     """
-    Differentiable soft compactness loss.
+    Differentiable soft compactness/shape regularity loss.
 
-    Uses predicted field probabilities instead of hard polygons:
-        soft_area = sum(probabilities)
-        soft_perimeter = sum(probability gradients)
-        compactness = 4*pi*area / perimeter^2
+    Instead of directly using compactness = 4*pi*A / P^2,
+    this uses the inverse form:
 
-    The loss compares predicted soft compactness to label soft compactness.
+        shape_irregularity = P^2 / (4*pi*A)
+
+    This is more numerically stable because very small soft perimeter
+    does not explode the loss.
+
+    The loss compares predicted and label shape irregularity using log1p.
     """
 
     def __init__(self, field_class=1, ignore_index=-100, eps=1e-6):
@@ -182,49 +185,49 @@ class SoftCompactnessLoss(nn.Module):
         perimeter = dx.sum(dim=(1, 2)) + dy.sum(dim=(1, 2))
         return perimeter
 
-    def _soft_compactness(self, prob):
+    def _shape_irregularity(self, prob):
         """
         prob: [B, H, W]
         """
         area = prob.sum(dim=(1, 2))
         perimeter = self._soft_perimeter(prob)
 
-        compactness = (4.0 * math.pi * area) / (
-            perimeter ** 2 + self.eps
+        irregularity = (perimeter ** 2) / (
+            4.0 * math.pi * area.clamp_min(self.eps)
         )
 
-        return compactness
+        return irregularity
 
     def forward(self, logits, target):
         """
         logits: [B, C, H, W]
-        target: [B, H, W]
+        target: [B, H, W] or [B, 1, H, W]
         """
 
-        # Convert logits to probabilities
-        probs = F.softmax(logits, dim=1)
+        # Handle target shape safely
+        if target.ndim == 4 and target.shape[1] == 1:
+            target = target.squeeze(1)
 
-        # Predicted soft field probability
+        probs = F.softmax(logits, dim=1)
         pred_field_prob = probs[:, self.field_class, :, :]
 
-        # Valid mask for ignore_index
         valid_mask = target != self.ignore_index
-
-        # Label binary field mask
         safe_target = target.masked_fill(~valid_mask, 0)
+
         label_field_prob = (safe_target == self.field_class).float()
 
-        # Remove ignored pixels from both prediction and label
         valid_float = valid_mask.float()
         pred_field_prob = pred_field_prob * valid_float
         label_field_prob = label_field_prob * valid_float
 
-        # Compute compactness
-        pred_compactness = self._soft_compactness(pred_field_prob)
-        label_compactness = self._soft_compactness(label_field_prob)
+        pred_irregularity = self._shape_irregularity(pred_field_prob)
+        label_irregularity = self._shape_irregularity(label_field_prob)
 
-        # Compare prediction vs label compactness
-        loss = torch.abs(pred_compactness - label_compactness)
+        # log1p keeps the scale controlled
+        loss = torch.abs(
+            torch.log1p(pred_irregularity) -
+            torch.log1p(label_irregularity)
+        )
 
         return loss.mean()
 
@@ -272,7 +275,7 @@ class LocallyWeightedTverskyFocalSoftCompactnessLoss(nn.Module):
         ignore_index=-100,
         reduction="sum",
         field_class=1,
-        lambda_compactness=0.01,
+        lambda_compactness=0.0001,
     ):
         super().__init__()
 

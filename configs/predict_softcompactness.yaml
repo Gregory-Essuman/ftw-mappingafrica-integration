@@ -1,0 +1,12 @@
+# configs/predict_softcompactness.yaml
+data_dir: /opt/app-root/src
+catalog: /opt/app-root/src/gregg-work/ftw-mappingafrica-integration/data/mappingafrica-zm-validate-all.csv
+model_ckpt: /opt/app-root/src/gregg-work/outputs/softcompactness_5k/lightning_logs/version_2/checkpoints/last.ckpt
+
+output_base: /opt/app-root/src/working/models/outputs/predictions/softcompactness_5k
+plot_dir: /opt/app-root/src/working/models/outputs/plots/softcompactness_5k
+
+global_stats: '{"min":[203.5],"max":[4590.4]}'
+normalization: min_max
+normalization_proc: gab
+create_plots: yes

@@ -167,6 +167,11 @@ class SoftCompactnessLoss(nn.Module):
     does not explode the loss.
 
     The loss compares predicted and label shape irregularity using log1p.
+    Empty-field cases are handled explicitly:
+        label empty + prediction empty      -> compactness loss = 0
+        label empty + prediction non-empty  -> penalize predicted field area
+        label non-empty + prediction empty  -> penalize missing field area
+        both non-empty                      -> compare shape irregularity
     """
 
     def __init__(self, field_class=1, ignore_index=-100, eps=1e-6):
@@ -220,14 +225,48 @@ class SoftCompactnessLoss(nn.Module):
         pred_field_prob = pred_field_prob * valid_float
         label_field_prob = label_field_prob * valid_float
 
-        pred_irregularity = self._shape_irregularity(pred_field_prob)
-        label_irregularity = self._shape_irregularity(label_field_prob)
+        # Added null handling for empty field masks
+        pred_area = pred_field_prob.sum(dim=(1, 2))
+        label_area = label_field_prob.sum(dim=(1, 2))
+        valid_area = valid_float.sum(dim=(1, 2)).clamp_min(self.eps)
 
-        # log1p keeps the scale controlled
-        loss = torch.abs(
-            torch.log1p(pred_irregularity) -
-            torch.log1p(label_irregularity)
+        pred_empty = pred_area <= self.eps
+        label_empty = label_area <= self.eps
+
+        loss = torch.zeros_like(pred_area)
+
+        # Case 1: label empty + prediction empty
+        both_empty = label_empty & pred_empty
+        loss[both_empty] = 0.0
+
+        # Case 2: label empty + prediction has field probability
+        false_positive = label_empty & (~pred_empty)
+        loss[false_positive] = (
+            pred_area[false_positive] / valid_area[false_positive]
         )
+
+        # Case 3: label has fields + prediction nearly empty
+        false_negative = (~label_empty) & pred_empty
+        loss[false_negative] = (
+            label_area[false_negative] / valid_area[false_negative]
+        )
+
+        # Case 4: both label and prediction have fields
+        both_have_fields = (~label_empty) & (~pred_empty)
+
+        if both_have_fields.any():
+            pred_irregularity = self._shape_irregularity(
+                pred_field_prob[both_have_fields]
+            )
+            label_irregularity = self._shape_irregularity(
+                label_field_prob[both_have_fields]
+            )
+
+            # log1p keeps the scale controlled
+            loss[both_have_fields] = torch.abs(
+                torch.log1p(pred_irregularity) -
+                torch.log1p(label_irregularity)
+            )
 
         return loss.mean()
 
